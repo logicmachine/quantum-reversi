@@ -1,226 +1,262 @@
 #pragma once
-#include <tuple>
 #include <array>
-#include <vector>
-#include <algorithm>
-#include <cassert>
 #include <cstdint>
+#include <cassert>
 
-static constexpr int BOARD_WIDTH = 6;
-static constexpr int BOARD_HEIGHT = 6;
-static constexpr int BOARD_SIZE = BOARD_WIDTH * BOARD_HEIGHT;
-
-static constexpr int dy_table[] = { 0, -1, -1, -1, 0, 1, 1, 1 };
-static constexpr int dx_table[] = { 1, 1, 0, -1, -1, -1, 0, 1 };
-
-static constexpr bool between(int a, int b, int c){
-	return a <= b && b < c;
-}
-
-class BitBoard {
-private:
-	uint64_t m_state;
+template <typename T>
+class PointerRange {
 public:
-	BitBoard() : m_state(0) { }
-	bool operator()(int p) const { return (m_state >> p) & 1; }
-	bool operator()(int r, int c) const {
-		if(!between(0, r, BOARD_HEIGHT)){ return false; }
-		if(!between(0, c, BOARD_WIDTH)){ return false; }
-		return (*this)(r * BOARD_WIDTH + c);
-	}
-	void set(int p){ m_state |= (1ul << p); }
-	void set(int r, int c){
-		assert(between(0, r, BOARD_HEIGHT));
-		assert(between(0, c, BOARD_WIDTH));
-		set(r * BOARD_WIDTH + c);
-	}
-	void reset(int p){ m_state &= ~(1ul << p); }
-	void reset(int r, int c){
-		assert(between(0, r, BOARD_HEIGHT));
-		assert(between(0, c, BOARD_WIDTH));
-		reset(r * BOARD_WIDTH + c);
-	}
-	int count() const {
-		return static_cast<int>(__builtin_popcountll(m_state));
-	}
-};
-
-class AdjacencyMatrix {
+	using value_type = T;
+	using const_iterator = const T *;
 private:
-	using row_type = std::array<int8_t, BOARD_SIZE>;
-	std::array<row_type, BOARD_SIZE> m_data;
+	const value_type *m_begin;
+	const value_type *m_end;
 public:
-	AdjacencyMatrix() : m_data() {
-		for(auto& row : m_data){
-			for(auto& elem : row){ elem = -1; }
-		}
-	}
-	int operator()(int p, int q) const { return m_data[p][q]; }
-	int operator()(int pr, int pc, int qr, int qc) const {
-		if(!between(0, pr, BOARD_HEIGHT)){ return false; }
-		if(!between(0, pc, BOARD_WIDTH)){ return false; }
-		const int p = pr * BOARD_HEIGHT + pc;
-		const int q = qr * BOARD_HEIGHT + pc;
-		return (*this)(p, q);
-	}
-	void connect(int p, int q, int step){
-		m_data[p][q] = step;
-		m_data[q][p] = step;
-	}
-	void connect(int pr, int pc, int qr, int qc, int step){
-		assert(between(0, pr, BOARD_HEIGHT));
-		assert(between(0, pc, BOARD_WIDTH));
-		const int p = pr * BOARD_HEIGHT + pc;
-		const int q = qr * BOARD_HEIGHT + pc;
-		connect(p, q, step);
-	}
+	PointerRange(const value_type *begin, const value_type *end)
+		: m_begin(begin)
+		, m_end(end)
+	{ }
+	bool empty() const { return m_begin == m_end; }
+	size_t size() const { return m_end - m_begin; }
+	value_type operator[](size_t i) const { return m_begin[i]; }
+	const_iterator cbegin() const { return m_begin; }
+	const_iterator cend() const { return m_end; }
+	const_iterator begin() const { return m_begin; }
+	const_iterator end() const { return m_end; }
 };
 
-class DisjointSet {
+
+class ClassicBoard {
+
 private:
-	mutable std::array<uint8_t, BOARD_SIZE> m_parents;
-	std::array<uint8_t, BOARD_SIZE> m_ranks;
+	std::array<uint64_t, 2> m_stones;
+
+	uint64_t clz(uint64_t x) const {
+		if(x == 0){ return 36; }
+		return __builtin_clzll(x) - (64 - 36);
+	}
+
+	uint64_t flip(int pos, uint64_t player, uint64_t other) const {
+		uint64_t mask_x, mask_y, mask_z, mask_w;
+		uint64_t outflank_x, outflank_y, outflank_z, outflank_w;
+		uint64_t flipped = 0;
+		const uint64_t om_x = other;
+		const uint64_t om_y = other & 0363636363636ul;
+		mask_x = 0004040404040ul >> (35 - pos);
+		mask_y = 0370000000000ul >> (35 - pos);
+		mask_z = 0010204102000ul >> (35 - pos);
+		mask_w = 0002010040201ul >> (35 - pos);
+		outflank_x = (0400000000000ul >> clz(~om_x & mask_x)) & player;
+		outflank_y = (0400000000000ul >> clz(~om_y & mask_y)) & player;
+		outflank_z = (0400000000000ul >> clz(~om_y & mask_z)) & player;
+		outflank_w = (0400000000000ul >> clz(~om_y & mask_w)) & player;
+		flipped |= (-outflank_x * 2) & mask_x;
+		flipped |= (-outflank_y * 2) & mask_y;
+		flipped |= (-outflank_z * 2) & mask_z;
+		flipped |= (-outflank_w * 2) & mask_w;
+		mask_x = 0010101010101ul << pos;
+		mask_y = 0000000000076ul << pos;
+		mask_z = 0000204102040ul << pos;
+		mask_w = 0402010040200ul << pos;
+		outflank_x = mask_x & ((om_x | ~mask_x) + 1) & player;
+		outflank_y = mask_y & ((om_y | ~mask_y) + 1) & player;
+		outflank_z = mask_z & ((om_y | ~mask_z) + 1) & player;
+		outflank_w = mask_w & ((om_y | ~mask_w) + 1) & player;
+		flipped |= (outflank_x - (outflank_x != 0)) & mask_x;
+		flipped |= (outflank_y - (outflank_y != 0)) & mask_y;
+		flipped |= (outflank_z - (outflank_z != 0)) & mask_z;
+		flipped |= (outflank_w - (outflank_w != 0)) & mask_w;
+		return flipped;
+	}
+
 public:
-	DisjointSet()
-		: m_parents()
-		, m_ranks()
-	{
-		for(int i = 0; i < BOARD_SIZE; ++i){
-			m_parents[i] = i;
-			m_ranks[i] = 0;
-		}
+	ClassicBoard()
+		: m_stones{0, 0}
+	{ }
+
+	bool operator==(const ClassicBoard& rhs) const {
+		return m_stones == rhs.m_stones;
 	}
-	int find(int x) const {
-		if(m_parents[x] == x){ return x; }
-		m_parents[x] = find(m_parents[x]);
-		return m_parents[x];
+
+	bool operator!=(const ClassicBoard& rhs) const {
+		return m_stones != rhs.m_stones;
 	}
-	int unite(int x, int y){
-		x = find(x);
-		y = find(y);
-		if(x == y){ return x; }
-		if(m_ranks[x] < m_ranks[y]){
-			m_parents[x] = y;
-			return y;
-		}else if(m_ranks[x] > m_ranks[y]){
-			m_parents[y] = x;
-			return x;
-		}else{
-			m_parents[y] = x;
-			++m_ranks[x];
-			return x;
-		}
+
+	int get(int p) const {
+		assert(0 <= p && p < 36);
+		const uint64_t mask = (1ul << p);
+		if(m_stones[0] & mask){ return  1; }
+		if(m_stones[1] & mask){ return -1; }
+		return 0;
 	}
-	bool same(int x, int y) const {
-		return find(x) == find(y);
+
+	void put(int p, int color){
+		assert(get(p) == 0);
+		const int t = (1 - color) >> 1;
+		const auto f = flip(p, m_stones[t], m_stones[1 - t]);
+		m_stones[0] ^= f;
+		m_stones[1] ^= f;
+		m_stones[t] |= (1ul << p);
 	}
+
+	void force_put(int p, int color){
+		const int t = (1 - color) >> 1;
+		m_stones[t] |= (1ul << p);
+	}
+
+	int count(int color) const {
+		const int t = (1 - color) >> 1;
+		return __builtin_popcountll(m_stones[t]);
+	}
+
+	uint64_t bitmap(int color) const {
+		const int t = (1 - color) >> 1;
+		return m_stones[t];
+	}
+
 };
 
-struct State {
-	BitBoard classic[2];
-	AdjacencyMatrix quantum_graph;
-	DisjointSet quantum_disjoint_set;
-
-	void put_classic(int p, int step){
-		const int pr = p / BOARD_WIDTH, pc = p % BOARD_HEIGHT;
-		const int color = step & 1;
-		auto& x = classic[color];
-		auto& y = classic[1 - color];
-		assert(!x(p) && !y(p));
-		x.set(p);
-		for(int d = 0; d < 8; ++d){
-			const int dx = dx_table[d], dy = dy_table[d];
-			int qr = pr + dy, qc = pc + dx;
-			while(y(qr, qc)){ qr += dy; qc += dx; }
-			if(x(qr, qc)){
-				qr -= dy; qc -= dx;
-				while(qr != pr || qc != pc){
-					x.set(qr, qc);
-					y.reset(qr, qc);
-					qr -= dy;
-					qc -= dx;
-				}
-			}
-		}
-	}
-
-	bool test_entanglement(int p, int q) const {
-		return quantum_disjoint_set.same(p, q);
-	}
-
-	void select_entanglement(int p, int step){
-		int head = 0, tail = 0;
-		std::array<int8_t, BOARD_SIZE> queue;
-		queue[tail++] = p;
-
-		BitBoard vis;
-		vis.set(p);
-
-		std::array<int8_t, BOARD_SIZE> fix;
-		std::fill(fix.begin(), fix.end(), -1);
-		fix[step] = p;
-
-		while(head < tail){
-			const int u = queue[head++];
-			for(int v = 0; v < BOARD_SIZE; ++v){
-				const int s = quantum_graph(u, v);
-				if(s < 0 || vis(v)){ continue; }
-				queue[tail++] = v;
-				vis.set(v);
-				fix[s] = v;
-			}
-		}
-		for(int i = BOARD_SIZE - 1; i >= 0; --i){
-			if(fix[i] >= 0){ put_classic(fix[i], i); }
-		}
-	}
-
-	void put_quantum(int p, int q, int step){
-		quantum_graph.connect(p, q, step);
-		quantum_disjoint_set.unite(p, q);
-	}
-};
-
-inline std::ostream& operator<<(std::ostream& os, const State& s){
-	char board_str[BOARD_HEIGHT][BOARD_WIDTH + 1] = { { '\0' } };
-	for(int i = 0; i < BOARD_HEIGHT; ++i){
-		for(int j = 0; j < BOARD_WIDTH; ++j){
-			if(s.classic[0](i, j)){
-				board_str[i][j] = 'o';
-			}else if(s.classic[1](i, j)){
-				board_str[i][j] = 'x';
-			}else{
-				board_str[i][j] = '.';
-			}
-		}
-	}
-	std::vector<std::tuple<int, int, int>> edges;
-	for(int p = 0; p < BOARD_SIZE; ++p){
-		if(s.classic[0](p) || s.classic[1](p)){ continue; }
-		for(int q = p + 1; q < BOARD_SIZE; ++q){
-			if(s.classic[0](q) || s.classic[1](q)){ continue; }
-			const int step = s.quantum_graph(p, q);
-			if(step >= 0){
-				edges.emplace_back(step, p, q);
-				board_str[p / BOARD_WIDTH][p % BOARD_WIDTH] = '?';
-				board_str[q / BOARD_WIDTH][q % BOARD_WIDTH] = '?';
-			}
-		}
-	}
-	std::sort(edges.begin(), edges.end());
-	for(const auto& e : edges){
-		const int color = std::get<0>(e) & 1;
-		const int p = std::get<1>(e), q = std::get<2>(e);
-		os << "(" << "ox"[color] << ", "
-		   << static_cast<char>('a' + p % BOARD_WIDTH)
-		   << static_cast<char>('1' + p / BOARD_WIDTH) << ", "
-		   << static_cast<char>('a' + q % BOARD_WIDTH)
-		   << static_cast<char>('1' + q / BOARD_WIDTH) << ") ";
-	}
-	if(!edges.empty()){ os << std::endl; }
-	os << "  abcdef" << std::endl;
-	for(int i = 0; i < BOARD_HEIGHT; ++i){
-		os << (i + 1) << " " << board_str[i] << std::endl;
+std::ostream& operator<<(std::ostream& os, const ClassicBoard& b){
+	for(int i = 0; i < 6; ++i){
+		for(int j = 0; j < 6; ++j){ os << "x.o"[b.get(i * 6 + j) + 1]; }
+		os << std::endl;
 	}
 	return os;
 }
+
+
+class State {
+
+public:
+	struct Edge {
+		int8_t u, v, color;
+		Edge() : u(0), v(0), color(0) { }
+		Edge(int u, int v, int c) : u(u), v(v), color(c) { }
+	};
+
+private:
+	ClassicBoard m_classic_board;
+	size_t m_num_edges;
+	std::array<Edge, 36> m_edges;
+
+	uint64_t test_reachability(int root) const {
+		uint64_t reachable = (1ul << root);
+		while(true){
+			const auto before = reachable;
+			for(const auto& e : edges()){
+				const uint64_t u = (1ul << e.u), v = (1ul << e.v);
+				if(reachable & u){ reachable |= v; }
+				if(reachable & v){ reachable |= u; }
+			}
+			if(reachable == before){ break; }
+		}
+		return reachable;
+	}
+
+public:
+	State()
+		: m_classic_board()
+		, m_num_edges(0)
+		, m_edges()
+	{ }
+
+	static State create_initial_state(){
+		return State();
+	}
+
+	const ClassicBoard& classic_board() const {
+		return m_classic_board;
+	}
+
+	PointerRange<Edge> edges() const {
+		return PointerRange<Edge>(&m_edges[0], &m_edges[m_num_edges]);
+	}
+
+	bool test_entanglement(int p, int q) const {
+		assert(m_classic_board.get(p) == 0);
+		assert(m_classic_board.get(q) == 0);
+		return (test_reachability(p) & (1ul << q)) != 0;
+	}
+
+	void select_entanglement(int p, int color){
+		uint64_t reachable = (1ul << p);
+		std::array<int, 36> fix_positions, fix_colors;
+		std::fill(fix_colors.begin(), fix_colors.end(), 0);
+		fix_positions[m_num_edges] = p;
+		fix_colors[m_num_edges] = color;
+		while(true){
+			const auto before = reachable;
+			for(size_t i = 0; i < m_num_edges; ++i){
+				const auto& e = m_edges[i];
+				const uint64_t u = (1ul << e.u), v = (1ul << e.v);
+				if(reachable & u){
+					if(!(reachable & v)){
+						fix_positions[i] = e.v;
+						fix_colors[i] = e.color;
+						reachable |= v;
+					}
+				}else if(reachable & v){
+					fix_positions[i] = e.u;
+					fix_colors[i] = e.color;
+					reachable |= u;
+				}
+			}
+			if(reachable == before){ break; }
+		}
+		for(int i = static_cast<int>(m_num_edges); i >= 0; --i){
+			if(fix_colors[i]){
+				m_classic_board.put(fix_positions[i], fix_colors[i]);
+			}
+		}
+		size_t tail = 0;
+		for(size_t i = 0; i < m_num_edges; ++i){
+			const auto& e = m_edges[i];
+			if(!(reachable & (1ul << e.u))){ m_edges[tail++] = e; }
+		}
+		m_num_edges = tail;
+	}
+
+	void put(int p, int q, int color){
+		assert(!test_entanglement(p, q));
+		m_edges[m_num_edges++] = Edge(p, q, color);
+	}
+
+	void put_classic(int p, int color){
+		m_classic_board.put(p, color);
+	}
+
+	void force_put_classic(int p, int color){
+		m_classic_board.force_put(p, color);
+	}
+
+};
+
+std::ostream& operator<<(std::ostream& os, const State& s){
+	char lines[6][7] = { { 0 } };
+	for(int i = 0; i < 6; ++i){
+		for(int j = 0; j < 6; ++j){
+			lines[i][j] = "x.o"[s.classic_board().get(i * 6 + j) + 1];
+		}
+	}
+	for(const auto& e : s.edges()){
+		const int ur = e.u / 6, uc = e.u % 6;
+		const int vr = e.v / 6, vc = e.v % 6;
+		const int c = e.color;
+		lines[ur][uc] = lines[vr][vc] = '=';
+		os << "(" << "x.o"[c + 1] << ", " << ur << uc << ", " << vr << vc << ") ";
+	}
+	if(s.edges().empty()){ os << "(no edges)"; }
+	os << std::endl;
+	for(int i = 0; i < 6; ++i){ os << lines[i] << std::endl; }
+	return os;
+}
+
+
+struct History {
+	int p;
+	int q;
+	int select;
+
+	History() : p(0), q(0), select(-1) { }
+	History(int p, int q, int s = -1) : p(p), q(q), select(s) { }
+};

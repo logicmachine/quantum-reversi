@@ -1,35 +1,18 @@
 #pragma once
-#include <vector>
-#include <random>
-#include "state.hpp"
+#include <cstdint>
 
-class RandomSolver {
+inline uint32_t xorshift128(){
+	static uint32_t x = 192479812u;
+	static uint32_t y = 784892731u;
+	static uint32_t z = 427398108u;
+	static uint32_t w =  48382934u;
+	const uint32_t t = x ^ (x << 11);
+	x = y; y = z; z = w;
+	w = (w ^ (w >> 19)) ^ (t ^ (t >> 8));
+	return w;
+}
 
-private:
-	std::default_random_engine m_engine;
-
-public:
-	RandomSolver(){ }
-
-	std::pair<int, int> play(const State& root, int step){
-		std::vector<int> places;
-		for(int i = 0; i < BOARD_SIZE; ++i){
-			if(root.classic[0](i) || root.classic[1](i)){ continue; }
-			places.push_back(i);
-		}
-		if(places.size() == 1){
-			return std::make_pair(places[0], places[0]);
-		}
-		std::shuffle(places.begin(), places.end(), m_engine);
-		return std::make_pair(places[0], places[1]);
-	}
-
-	int select(const State& root, int p, int q, int step){
-		if(m_engine() % 2 == 0){
-			return p;
-		}else{
-			return q;
-		}
-	}
-
-};
+inline uint32_t modulus_random(uint32_t mod){
+	const auto t = static_cast<uint64_t>(xorshift128()) * mod;
+	return static_cast<uint32_t>(t >> 32);
+}

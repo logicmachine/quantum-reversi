@@ -8,12 +8,12 @@
 static State parse_state(const nlohmann::json& obj){
 	State state;
 	const auto& board = obj["board"];
-	for(int i = 0; i < BOARD_SIZE; ++i){
+	for(int i = 0; i < 36; ++i){
 		const std::string c = board[i];
 		if(c == "o"){
-			state.classic[0].set(i);
+			state.force_put_classic(i, 1);
 		}else if(c == "x"){
-			state.classic[1].set(i);
+			state.force_put_classic(i, -1);
 		}
 	}
 	const auto& moves = obj["moves"];
@@ -21,12 +21,13 @@ static State parse_state(const nlohmann::json& obj){
 	if(obj["action"] == "select"){ --num_moves; }
 	for(int step = 4; step < num_moves; ++step){
 		const auto& move = moves[step];
+		const auto& b = state.classic_board();
 		const auto p = static_cast<int>(move[0][0]);
 		const auto q = static_cast<int>(move[0][1]);
 		const auto type = static_cast<int>(move[1]);
-		if(state.classic[0](p) || state.classic[1](p)){ continue; }
-		if(state.classic[0](q) || state.classic[1](q)){ continue; }
-		if(type < 0){ state.put_quantum(p, q, step); }
+		if(b.get(p) || b.get(q)){ continue; }
+		const int color = 1 - 2 * (step & 1);
+		if(type < 0){ state.put(p, q, color); }
 	}
 	return state;
 }
@@ -36,6 +37,24 @@ static std::pair<int, int> parse_entanglement(const nlohmann::json& obj){
 	return std::make_pair(
 		static_cast<int>(entanglement[0]),
 		static_cast<int>(entanglement[1]));
+}
+
+static std::vector<History> parse_history(const nlohmann::json& obj){
+	const auto& moves = obj["moves"];
+	int num_moves = moves.size();
+	std::vector<History> history;
+	for(int i = 0; i < num_moves; ++i){
+		const auto& move = moves[i];
+		int p = static_cast<int>(move[0][0]);
+		int q = static_cast<int>(move[0][1]);
+		int select = static_cast<int>(move[1]);
+		if(p > q){
+			std::swap(p, q);
+			if(select >= 0){ select = 1 - select; }
+		}
+		history.emplace_back(p, q, select);
+	}
+	return history;
 }
 
 int main(){
@@ -52,7 +71,7 @@ int main(){
 	}
 
 	int step = 4 + self_color;
-	MCTSSolver solver;
+	mcts::MCTSSolver solver;
 	while(true){
 		std::string line;
 		std::getline(std::cin, line);
@@ -63,43 +82,18 @@ int main(){
 			break;
 		}else if(action == "play"){
 			const auto root = parse_state(obj);
-			const auto ret = solver.play(root, step);
+			const auto history = parse_history(obj);
+			const auto ret = solver.play(root, step, history);
 			std::cout << "{\"positions\":[" << ret.first << "," << ret.second << "]}" << std::endl;
 			step += 2;
 		}else if(action == "select"){
 			const auto root = parse_state(obj);
+			const auto history = parse_history(obj);
 			const auto entanglement = parse_entanglement(obj);
 			const auto ret = solver.select(
-				root, entanglement.first, entanglement.second, step - 1);
+				root, entanglement.first, entanglement.second, step - 1, history);
 			std::cout << "{\"select\":" << ret << "}" << std::endl;
 		}
 	}
-#if 0
-	State state;
-	state.put_classic(15, 0);
-	state.put_classic(14, 1);
-	state.put_classic(20, 0);
-	state.put_classic(21, 1);
-	for(int step = 4; step < BOARD_SIZE; ++step){
-		std::cout << state;
-		std::cout << "xo"[step & 1] << " >> " << std::flush;
-		std::string ps, qs;
-		std::cin >> ps >> qs;
-		const int p = (ps[1] - '1') * BOARD_WIDTH + (ps[0] - 'a');
-		const int q = (qs[1] - '1') * BOARD_WIDTH + (qs[0] - 'a');
-		if(state.test_entanglement(p, q)){
-			std::string select;
-			do {
-				std::cout << "[" << ps << ", " << qs << "] >> " << std::flush;
-				std::cin >> select;
-			} while(select != ps && select != qs);
-			const int s = (select[1] - '1') * BOARD_WIDTH + (select[0] - 'a');
-			state.select_entanglement(s, step);
-		}else{
-			state.put_quantum(p, q, step);
-		}
-		std::cout << std::endl;
-	}
-#endif
 	return 0;
 }
