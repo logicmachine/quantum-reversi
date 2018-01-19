@@ -10,7 +10,7 @@
 
 namespace mcts {
 
-static constexpr int NUM_PLAYOUTS = 100000;
+static constexpr int NUM_PLAYOUTS = 50000;
 static constexpr int EXPAND_THRESHOLD = 100;
 
 struct Move {
@@ -164,9 +164,10 @@ public:
 		if(m_num_playouts == 0){
 			return std::numeric_limits<double>::infinity();
 		}
-		const double mean = static_cast<double>(m_num_wins) / m_num_playouts;
-		const double bias = sqrt(2 * log(total_playouts) / m_num_playouts);
-		return mean + bias;
+		const double r = static_cast<double>(m_num_wins) / m_num_playouts;
+		const double x = log(total_playouts) / m_num_playouts;
+		const double y = std::min(0.25, r - r * r + sqrt(2.0 * x));
+		return r + sqrt(x * y);
 	}
 
 	const Move& last_move() const {

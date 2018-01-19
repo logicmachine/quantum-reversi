@@ -1,9 +1,12 @@
 #include <iostream>
 #include <utility>
+#include <random>
 #include <cassert>
 #include "state.hpp"
 #include "mcts.hpp"
 #include "json.hpp"
+
+static std::random_device g_random_device;
 
 static State parse_state(const nlohmann::json& obj){
 	State state;
@@ -59,6 +62,7 @@ static std::vector<History> parse_history(const nlohmann::json& obj){
 
 int main(){
 	std::ios_base::sync_with_stdio(false);
+	set_seed(g_random_device());
 
 	int self_color = 0;
 	{	// init
