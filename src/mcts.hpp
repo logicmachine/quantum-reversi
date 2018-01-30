@@ -2,6 +2,7 @@
 #include <vector>
 #include <limits>
 #include <memory>
+#include <chrono>
 #include <cmath>
 #include <cassert>
 #include "state.hpp"
@@ -10,8 +11,12 @@
 
 namespace mcts {
 
-static constexpr int NUM_PLAYOUTS = 50000;
-static constexpr int EXPAND_THRESHOLD = 100;
+static constexpr int NUM_PLAYOUTS = 40000;
+static constexpr int PLAYOUT_BLOCK_SIZE = 100;
+static constexpr int PLAYOUT_SCALE = 4;
+static constexpr int EXPAND_THRESHOLD = 80;
+static constexpr double TIME_LIMIT = 9.8;
+static constexpr double TIME_PER_TURN = 0.2;
 
 struct Move {
 	int p, q;
@@ -128,20 +133,22 @@ public:
 		}
 	}
 
-	int update(){
-		int winner = 0;
+	std::array<int, 3> update(){
+		std::array<int, 3> result_counter = { 0, 0, 0 };
 		if(m_children.empty() && m_num_playouts == EXPAND_THRESHOLD){
 			expand();
 		}
 		if(m_children.empty()){
 			// random playout
-			winner = playout(m_state);
+			for(int i = 0; i < PLAYOUT_SCALE; ++i){
+				++result_counter[playout(m_state) + 1];
+			}
+		}else if(m_num_playouts < m_children.size()){
+			// run playout on unprocessed node
+			result_counter = m_children[m_num_playouts]->update();
 		}else{
 			// count number of playouts in this subtree
-			int total_playouts = 0;
-			for(const auto& child : m_children){
-				total_playouts += child->m_num_playouts;
-			}
+			int total_playouts = m_num_playouts;
 			// select a node having best UCB1 score
 			double best_score = -std::numeric_limits<double>::infinity();
 			MCTSNode *best_node = nullptr;
@@ -153,11 +160,11 @@ public:
 				}
 			}
 			// run playout
-			winner = best_node->update();
+			result_counter = best_node->update();
 		}
-		++m_num_playouts;
-		if(winner == m_last_color){ ++m_num_wins; }
-		return winner;
+		m_num_playouts += PLAYOUT_SCALE;
+		m_num_wins += result_counter[m_last_color + 1];
+		return result_counter;
 	}
 
 	double ucb_score(int total_playouts) const {
@@ -201,17 +208,53 @@ public:
 
 class MCTSSolver {
 
+private:
+	std::chrono::duration<double> m_remaining_time;
+
+	void update_loop(MCTSNode& root){
+		const auto start_time = std::chrono::steady_clock::now();
+		const auto break_time = start_time + m_remaining_time * TIME_PER_TURN;
+		auto last_time = start_time;
+		int debug = 0;
+		do {
+			for(int i = 0; i < PLAYOUT_BLOCK_SIZE; ++i){ root.update(); ++debug; }
+			last_time = std::chrono::steady_clock::now();
+		} while(last_time < break_time);
+		m_remaining_time -= last_time - start_time;
+	}
+
 public:
-	MCTSSolver(){ }
+	MCTSSolver()
+		: m_remaining_time(TIME_LIMIT)
+	{ }
 
 	std::pair<int, int> play(
 		const State& root, int step, const std::vector<History>& history)
 	{
+		if(step == 4){
+			// shortcut: first step
+			return std::make_pair(0, 35);
+		}else if(step == 5){
+			// shortcut: second step
+			int used[36] = { 0 };
+			for(const auto& h : history){ used[h.p] = used[h.q] = 1; }
+			const std::pair<int, int> candidates[] = {
+				std::make_pair<int, int>(5, 30),
+				std::make_pair<int, int>(0, 35),
+				std::make_pair<int, int>(0, 5),
+				std::make_pair<int, int>(0, 30),
+				std::make_pair<int, int>(5, 35),
+				std::make_pair<int, int>(30, 35)
+			};
+			for(const auto& p : candidates){
+				if(used[p.first] == 0 && used[p.second] == 0){ return p; }
+			}
+		}
 		const int color = 1 - 2 * (step & 1);
 		auto node = std::make_unique<MCTSNode>(
 			nullptr, root, color, Move(), false);
 		node->expand();
-		for(int iter = 0; iter < NUM_PLAYOUTS; ++iter){ node->update(); }
+		update_loop(*node);
 		const auto best = node->select_best_move();
 		return std::make_pair(best.p, best.q);
 	}
@@ -223,7 +266,7 @@ public:
 		auto node = std::make_unique<MCTSNode>(
 			nullptr, root, color, Move(p, q), true);
 		node->expand();
-		for(int iter = 0; iter < NUM_PLAYOUTS; ++iter){ node->update(); }
+		update_loop(*node);
 		const auto best = node->select_best_move();
 		return best.p;
 	}
